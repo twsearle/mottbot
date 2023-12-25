@@ -1,0 +1,7 @@
+rembg
+pytesseract
+discord.py
+tinydb
+pytest
+black
+
