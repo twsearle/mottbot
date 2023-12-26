@@ -41,6 +41,9 @@ def run_discord_bot():
         if message.author == client.user:
             return
 
+        # if inmywatchedchannel and is image:
+        #    turn image into auec payment message
+        # elif
         if not message.content.startswith(APP_COMMAND):
             return
 

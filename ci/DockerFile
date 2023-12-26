@@ -1,0 +1,27 @@
+FROM mambaorg/micromamba:1.5.6
+MAINTAINER twsearle 14909402+twsearle@users.noreply.github.com
+ 
+WORKDIR /usr/local/mott
+COPY --chown=$MAMBA_USER:$MAMBA_USER ci/env.yaml /tmp/env.yaml
+COPY --chown=$MAMBA_USER:$MAMBA_USER --chmod=775 ci/entrypoint.sh entrypoint.sh
+COPY --chown=$MAMBA_USER:$MAMBA_USER run.py .
+COPY --chown=$MAMBA_USER:$MAMBA_USER mott ./mott
+COPY --chown=$MAMBA_USER:$MAMBA_USER tests ./tests
+COPY --chown=$MAMBA_USER:$MAMBA_USER README.md .
+COPY --chown=$MAMBA_USER:$MAMBA_USER LICENSE .
+
+RUN micromamba install -y -n base -f /tmp/env.yaml && \
+    micromamba clean --all --yes 
+ARG MAMBA_DOCKERFILE_ACTIVATE=1
+
+USER root
+RUN apt-get -y update && \
+    apt-get -y upgrade && \
+    apt install -y libgl1-mesa-glx && \
+    apt-get -y install tesseract-ocr && \
+    apt-get clean
+USER $MAMBA_USER 
+RUN black --check ./ && pytest
+
+ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "/usr/local/mott/entrypoint.sh"]
+ 

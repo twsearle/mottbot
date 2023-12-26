@@ -1,2 +1,5 @@
 # mottbot
-Star Citizen mo.trader tracker bot for orgs in discord
+
+Star Citizen mo.trader tracker bot for orgs in discord.
+
+
