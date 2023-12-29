@@ -1,4 +1,20 @@
+import time
+from datetime import datetime
+import logging
+import tinydb
 from mott.exceptions import MottException
+
+logger_discord = logging.getLogger("discord")
+
+
+class AccountEmptyError(MottException):
+    def __init__(self, account_name, message=""):
+        if message == "":
+            self.message = f"Account: {account_name} has no transactions."
+        else:
+            self.message = message
+        self.account_name = account_name
+        super().__init__(self.message)
 
 
 class AccountDoesNotExistError(MottException):
@@ -22,92 +38,121 @@ class AccountAlreadyExistsError(MottException):
 
 
 class Accounts:
-    def __init__(self, database_name):
-        self.name_ = database_name
-        self.conn_ = {}
-        self.accounts_table_ = []
+    def __init__(self, db):
+        self.db = db
+        self.accounts_table = self.db.table("accounts")
 
     def create(self, account_name, role_id):
-        if self.conn_.get(account_name, None) != None:
+        query = tinydb.Query()
+        if self.accounts_table.contains(query.account == account_name):
             raise AccountAlreadyExistsError(account_name)
-        self.accounts_table_.append(
-            {"account name": account_name, "owning role": role_id}
+        self.accounts_table.insert(
+            {"account": account_name, "owners": role_id.replace("@", "")}
         )
-        self.conn_[account_name] = [{"id": 0, "source": "Account Setup", "value": 0}]
+        table = self.db.table(f"{account_name}_transactions")
 
     def delete(self, account_name):
-        if self.conn_.get(account_name, None) == None:
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
-        del self.conn_[account_name]
+        self.db.drop_table(f"{account_name}_transactions")
+        self.accounts_table.remove(tinydb.Query()["account"] == account_name)
+
+    def owning_role(self, account_name):
+        query = tinydb.Query()
+        account_info = self.accounts_table.get(query.account == account_name)
+        if account_info["account"] == account_name:
+            return account_info["owners"]
+        raise MottException(f"owning role for account: {account_name} not found")
+        return None
 
     def reset(self, account_name):
-        if self.conn_.get(account_name, None) == None:
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
-
         role = self.owning_role(account_name)
         self.delete(account_name)
         self.create(account_name, role)
 
-    def owning_role(self, account_name):
-        for account_info in self.accounts_table_:
-            if account_info["account name"] == account_name:
-                return account_info["owning role"]
-
-        raise MottException(f"owning role for account: {account_name} not found")
-        return None
-
     def balance(self, account_name) -> float:
-        if self.conn_.get(account_name, None) == None:
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
         total = 0
-        for line in self.conn_[account_name]:
-            total += line["value"]
+        logger_discord.info(f"balance known accounts: {self.db.tables()}")
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        for doc in transactions_db:
+            total += doc["value"]
         return total
 
     def pay_to(self, sender_name, account_name, value):
-        if self.conn_.get(account_name, None) == None:
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
-        rowid = len(self.conn_[account_name])
-        self.conn_[account_name].append(
-            {"id": rowid, "source": sender_name, "value": value}
+        d = datetime.now()
+        unixtime = int(time.mktime(d.timetuple()))
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        transactions_db.insert(
+            {"timestamp": unixtime, "id": sender_name, "value": value}
         )
 
-    def withdraw_from(self, account_name, value):
-        if self.conn_.get(account_name, None) == None:
+    def withdraw_from(self, payee_name, account_name, value):
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
-        rowid = len(self.conn_[account_name])
-        self.conn_[account_name].append(
-            {"id": rowid, "source": "  --- ", "value": -value}
+        d = datetime.now()
+        unixtime = int(time.mktime(d.timetuple()))
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        transactions_db.insert(
+            {"timestamp": unixtime, "id": payee_name, "value": -value}
         )
 
     def last_transaction(self, account_name):
-        if not self.conn_.get(account_name, None):
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
-        last = self.conn_[account_name][-1]
-        return last
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        if len(transactions_db) < 1:
+            raise AccountEmptyError(account_name)
+        el = transactions_db.all()[-1]
+        return transactions_db.get(doc_id=el.doc_id)
 
     def summary(self, account_name):
-        if not self.conn_.get(account_name, None):
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
         source_contributions = {}
         withdrawls = 0
-        for line in self.conn_[account_name][1:]:
-            if line["id"] == 0:
-                continue
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        transaction_query = tinydb.Query()
+        for line in transactions_db:
             if line["value"] < 0:
                 withdrawls += abs(line["value"])
             else:
-                if source_contributions.get(line["source"]):
-                    source_contributions[line["source"]] += line["value"]
+                if source_contributions.get(line["id"]):
+                    source_contributions[line["id"]] += line["value"]
                 else:
-                    source_contributions[line["source"]] = line["value"]
+                    source_contributions[line["id"]] = line["value"]
         return source_contributions, withdrawls
 
+    def all(self, account_name):
+        return self.db.table(f"{account_name}_transactions").all()
+
     def permitted(self, account_name, role_ids):
-        for account_info in self.accounts_table_:
+        role_ids_san = [r.replace("@", "") for r in role_ids]
+        logger_discord.info(
+            f"permissions check: {role_ids_san} sufficient for {account_name}?"
+        )
+        for account_info in self.accounts_table:
+            logger_discord.info(
+                f"permissions check: {account_info['account']} {account_info['owners']}"
+            )
             if (
-                account_info["account name"] == account_name
-                and account_info["owning role"] in role_ids
+                account_info["account"] == account_name
+                and account_info["owners"] in role_ids_san
             ):
                 return True
         return False
+
+    def account_names(self):
+        return [doc["account"] for doc in self.accounts_table]

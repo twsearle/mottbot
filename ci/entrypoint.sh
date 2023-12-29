@@ -1,6 +1,5 @@
 #!/bin/sh
-#
 
-ls
+export DISCORD_BOT_DB_DIR=/usr/local/mott/data
 
-python run.py
+exec python run.py
