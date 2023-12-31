@@ -2,6 +2,13 @@ from mott.exceptions import MottException
 from mott.ocr import OCR
 import pytest
 
+import logging
+from logging import StreamHandler
+
+logger = logging.getLogger("discord")
+logger.setLevel(logging.DEBUG)
+logger.addHandler(StreamHandler())
+
 
 def test_ocr_local():
     input_uri = "tests/data/bigmotradertest.jpeg"
