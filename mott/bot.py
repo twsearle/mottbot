@@ -9,8 +9,6 @@ from mott.exceptions import MottException
 import mott.responses as responses
 from mott.ocr import OCR, uri_validator
 
-discord.utils.setup_logging()
-
 logger_discord = logging.getLogger("discord")
 logger_discord.setLevel(logging.INFO)
 log_dir = Path(os.getenv("DISCORD_BOT_DB_DIR", "."))
@@ -18,9 +16,16 @@ log_dir = Path(os.getenv("DISCORD_BOT_DB_DIR", "."))
 handler = logging.handlers.RotatingFileHandler(
     filename=log_dir / "mott_discord.log",
     encoding="utf-8",
-    maxBytes=1024 * 1024,  # 1 MiB
-    backupCount=5,
+    maxBytes=8 * 1024 * 1024,  # 8 MiB
+    backupCount=4,
 )
+dt_fmt = "%Y-%m-%d %H:%M:%S"
+formatter = logging.Formatter(
+    "[{asctime}] [{levelname:<8}] {name}: {message}", dt_fmt, style="{"
+)
+handler.setFormatter(formatter)
+logger_discord.addHandler(handler)
+# logger_discord.addHandler(logging.StreamHandler().setFormatter(formatter))
 
 
 async def send_message(response_handler, message, request_text, is_private):
@@ -77,14 +82,24 @@ def run_discord_bot():
                 f" {guild}#{channel} {username}: Reading images from {channel}"
             )
             for attachment in message.attachments:
-                if attachment_is_image(attachment):
-                    logger_discord.info(
-                        f" {guild}#{channel} {username}: Reading image at {attachment.url}"
-                    )
-                    auec_amount = OCR(attachment.proxy_url).image_to_auec()
-                    user_message = f"pay {auec_amount}"
-                    await send_message(
-                        response_handler, message, user_message, is_private=is_private
+                try:
+                    if attachment_is_image(attachment):
+                        logger_discord.info(
+                            f" {guild}#{channel} {username}: Reading image at {attachment.url}"
+                        )
+                        auec_amount = OCR(attachment.proxy_url).image_to_auec()
+                        user_message = f"pay {auec_amount}"
+                        await send_message(
+                            response_handler,
+                            message,
+                            user_message,
+                            is_private=is_private,
+                        )
+                except Exception as e:
+                    logger_discord.info("Exception during image text recognition")
+                    return (
+                        f"Sorry, I couldn't read the aUEC from that screenshot."
+                        f" Either try a different screenshot or enter the payment manually with `{APP_COMMAND} pay`."
                     )
             return
 
