@@ -12,6 +12,35 @@ from mott.exceptions import MottException
 from urllib.parse import urlparse
 
 
+class OCRInvalidURLError(MottException):
+    def __init__(self, URI, message=""):
+        if message == "":
+            self.message = f"Invalid image URL: {URI}"
+        else:
+            self.message = message
+        super().__init__(self.message)
+
+
+class OCRaUECNotFoundError(MottException):
+    def __init__(self, contents, message=""):
+        if message == "":
+            self.message = f"OCR: aUEC not found in image contents"
+        else:
+            self.message = message
+        logger_discord.debug(f"Failed to detect aUEC in image contents: '{contents}'")
+        super().__init__(self.message)
+
+
+class OCRNumberNotFoundError(MottException):
+    def __init__(self, number_string, message=""):
+        if message == "":
+            self.message = f"OCR: number not found in image contents"
+        else:
+            self.message = message
+        logger_discord.debug(f"Failed to detect a number of aUEC in: '{number_string}'")
+        super().__init__(self.message)
+
+
 def uri_validator(x):
     try:
         result = urlparse(x)
@@ -32,18 +61,35 @@ def convert_image_format(image, output_format=None):
 class OCR:
     def __init__(self, URI):
         self.uri = URI
-        if uri_validator(URI):
-            validation = validators.url(URI)
+        self.setup()
+
+    def setup(self):
+        if uri_validator(self.uri):
+            validation = True
+            try:
+                validation = validators.url(self.uri)
+            except validators.utils.ValidationError:
+                raise OCRInvalidURLError(self.uri)
             if not validation:
-                raise MottException(f"Invalid image URL: {URI}")
-            r = requests.get(URI, stream=True)
+                raise OCRInvalidURLError(self.uri)
+
+            r = requests.get(self.uri, stream=True)
             if r.status_code != 200:
                 raise MottException(
-                    f"Failed to read: {URI} requests status_code: {r.status_code}"
+                    f"Failed to read: {uri} requests status_code: {r.status_code}"
                 )
             self.image = Image.open(io.BytesIO(r.content))
+
+            # async with aiohttp.ClientSession() as session:
+            #    async with session.get(self.uri) as r:
+            #        if r.status != 200:
+            #            raise MottException(
+            #                f"Failed to read: {self.uri} status_code: {r.status_code}"
+            #            )
+            #        req_contents = await r.contents()
+            #        self.image = Image.open(io.BytesIO(req_contents))
         else:
-            self.image = Image.open(URI)
+            self.image = Image.open(self.uri)
 
     def contains_auec(self, contents) -> int:
         auec_variants = []
@@ -58,10 +104,7 @@ class OCR:
             if number_end >= 0:
                 break
         if number_end < 0:
-            logger_discord.debug(
-                f"Failed to detect aUEC in image contents: '{contents}'"
-            )
-            raise MottException(f"OCR failure: aUEC not found in image contents")
+            raise OCRaUECNotFoundError(contents)
         return number_end
 
     def auec_value(self, contents):
@@ -76,10 +119,7 @@ class OCR:
         try:
             value = int(number_string[::-1])
         except ValueError:
-            logger_discord.debug(
-                f"Failed to detect a number of aUEC in image contents: '{contents}'"
-            )
-            raise MottException(f"OCR failure: number not found in image contents")
+            raise OCRNumberNotFoundError(contents)
         return value
 
     def image_to_auec(self) -> float:
@@ -88,5 +128,5 @@ class OCR:
         self.image = self.image.convert("RGB")
         self.image = ImageOps.invert(self.image)
         self.image = ImageOps.autocontrast(self.image, cutoff=(0, 95))
-        contents = pytesseract.image_to_string(self.image)
+        contents = pytesseract.image_to_string(self.image, config=r"--psm 4")
         return self.auec_value(contents)
