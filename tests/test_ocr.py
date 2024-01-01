@@ -1,3 +1,9 @@
+import logging
+from logging import StreamHandler
+
+logger = logging.getLogger("discord")
+logger.setLevel(logging.DEBUG)
+
 from mott.exceptions import MottException
 from mott.ocr import (
     OCR,
@@ -7,40 +13,39 @@ from mott.ocr import (
     uri_validator,
 )
 import pytest
-
-import logging
-from logging import StreamHandler
-
-logger = logging.getLogger("discord")
-logger.setLevel(logging.DEBUG)
-logger.addHandler(StreamHandler())
+import pytest_asyncio
 
 
-@pytest.fixture
-def test_ocr():
-    return OCR("tests/data/bigmotradertest.jpeg")
+@pytest_asyncio.fixture
+async def test_ocr():
+    return await OCR.create("tests/data/bigmotradertest.jpeg")
 
 
 class TestOCR:
-    def test_ocr_local(self, test_ocr):
-        auec = test_ocr.image_to_auec()
+    @pytest.mark.asyncio
+    async def test_ocr_local(self, test_ocr):
+        auec = await test_ocr.image_to_auec()
         assert auec == 820000
 
-    def test_ocr_url(self):
+    @pytest.mark.asyncio
+    async def test_ocr_url(self):
         url = "https://en.wikipedia.org/wiki/Test_card#/media/File:SMPTE_Color_Bars.svg"
         assert uri_validator(url)
         with pytest.raises(OCRInvalidURLError):
-            _ = OCR(url)
+            _ = await OCR.create(url)
 
         url = "https://robertsspaceindustries.com/media/fupjr98kisd1fr/store_slideshow_large/BatCave_4k_v02.jpg"
         with pytest.raises(OCRaUECNotFoundError):
-            auec = OCR(url).image_to_auec()
+            ocr_obj = await OCR.create(url)
+            auec = await ocr_obj.image_to_auec()
 
         url = "https://github.com/twsearle/mottbot/blob/main/tests/data/bigmotradertest.jpeg?raw=true"
-        auec = OCR(url).image_to_auec()
+        ocr_obj = await OCR.create(url)
+        auec = await ocr_obj.image_to_auec()
         assert auec == 820000
 
-    def test_contains_auec(self, test_ocr):
+    @pytest.mark.asyncio
+    async def test_contains_auec(self, test_ocr):
         contents_throw = [" pounds", " notauec", "654jauec"]
         for c in contents_throw:
             with pytest.raises(OCRaUECNotFoundError):
@@ -56,7 +61,8 @@ class TestOCR:
         for k, v in contents_and_number_end.items():
             assert test_ocr.contains_auec(k) == v
 
-    def test_auec_value(self, test_ocr):
+    @pytest.mark.asyncio
+    async def test_auec_value(self, test_ocr):
         contents_throw = ["  aUEC", "abv avec"]
         for c in contents_throw:
             with pytest.raises(OCRNumberNotFoundError):

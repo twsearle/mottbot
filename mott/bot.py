@@ -4,27 +4,31 @@ import logging.handlers
 from pathlib import Path
 
 import discord
+import asyncio
 
 from mott.exceptions import MottException
 import mott.responses as responses
 from mott.ocr import OCR, uri_validator
 
-logger_discord = logging.getLogger("discord")
-logger_discord.setLevel(logging.INFO)
-log_dir = Path(os.getenv("DISCORD_BOT_DB_DIR", "."))
 
-handler = logging.handlers.RotatingFileHandler(
-    filename=log_dir / "mott_discord.log",
-    encoding="utf-8",
-    maxBytes=8 * 1024 * 1024,  # 8 MiB
-    backupCount=4,
-)
-dt_fmt = "%Y-%m-%d %H:%M:%S"
-formatter = logging.Formatter(
-    "[{asctime}] [{levelname:<8}] {name}: {message}", dt_fmt, style="{"
-)
-handler.setFormatter(formatter)
-logger_discord.addHandler(handler)
+discord.utils.setup_logging(level=logging.INFO, root=False)
+
+logger_discord = logging.getLogger("discord")
+# logger_discord.setLevel(logging.INFO)
+# log_dir = Path(os.getenv("DISCORD_BOT_DB_DIR", "."))
+#
+##handler = logging.handlers.RotatingFileHandler(
+##    filename=log_dir / "mott_discord.log",
+##    encoding="utf-8",
+##    maxBytes=8 * 1024 * 1024,  # 8 MiB
+##    backupCount=4,
+##)
+# dt_fmt = "%Y-%m-%d %H:%M:%S"
+# formatter = logging.Formatter(
+#    "[{asctime}] [{levelname:<8}] {name}: {message}", dt_fmt, style="{"
+# )
+##handler.setFormatter(formatter)
+##logger_discord.addHandler(handler)
 # logger_discord.addHandler(logging.StreamHandler().setFormatter(formatter))
 
 
@@ -87,7 +91,8 @@ def run_discord_bot():
                         logger_discord.info(
                             f" {guild}#{channel} {username}: Reading image at {attachment.url}"
                         )
-                        auec_amount = OCR(attachment.proxy_url).image_to_auec()
+                        ocr_reader = await OCR.create(attachment.proxy_url)
+                        auec_amount = await ocr_reader.image_to_auec()
                         user_message = f"pay {auec_amount}"
                         await send_message(
                             response_handler,
@@ -95,12 +100,14 @@ def run_discord_bot():
                             user_message,
                             is_private=is_private,
                         )
-                except Exception as e:
+                except MottException as e:
                     logger_discord.info("Exception during image text recognition")
-                    return (
+                    response_message = (
                         f"Sorry, I couldn't read the aUEC from that screenshot."
-                        f" Either try a different screenshot or enter the payment manually with `{APP_COMMAND} pay`."
+                        f" Either check the examples above or try a different screenshot or enter the payment manually with `{APP_COMMAND} pay`."
                     )
+                    await message.channel.send(response_message)
+
             return
 
         elif not message.content.startswith(APP_COMMAND):

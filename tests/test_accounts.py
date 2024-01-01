@@ -1,3 +1,9 @@
+import logging
+from logging import StreamHandler
+
+logger = logging.getLogger("discord")
+logger.setLevel(logging.DEBUG)
+
 import pytest
 import tinydb
 import tinydb.storages

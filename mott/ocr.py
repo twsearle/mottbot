@@ -3,7 +3,7 @@ import logging
 from PIL import Image, ImageOps
 import pytesseract
 import validators
-import requests
+import aiohttp
 import io
 
 logger_discord = logging.getLogger("discord")
@@ -59,11 +59,10 @@ def convert_image_format(image, output_format=None):
 
 
 class OCR:
-    def __init__(self, URI):
+    @classmethod
+    async def create(cls, URI):
+        self = cls()
         self.uri = URI
-        self.setup()
-
-    def setup(self):
         if uri_validator(self.uri):
             validation = True
             try:
@@ -73,23 +72,17 @@ class OCR:
             if not validation:
                 raise OCRInvalidURLError(self.uri)
 
-            r = requests.get(self.uri, stream=True)
-            if r.status_code != 200:
-                raise MottException(
-                    f"Failed to read: {uri} requests status_code: {r.status_code}"
-                )
-            self.image = Image.open(io.BytesIO(r.content))
-
-            # async with aiohttp.ClientSession() as session:
-            #    async with session.get(self.uri) as r:
-            #        if r.status != 200:
-            #            raise MottException(
-            #                f"Failed to read: {self.uri} status_code: {r.status_code}"
-            #            )
-            #        req_contents = await r.contents()
-            #        self.image = Image.open(io.BytesIO(req_contents))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.uri) as r:
+                    if r.status != 200:
+                        raise MottException(
+                            f"Failed to read: {self.uri} status_code: {r.status_code}"
+                        )
+                    req_contents = await r.read()
+                    self.image = Image.open(io.BytesIO(req_contents))
         else:
             self.image = Image.open(self.uri)
+        return self
 
     def contains_auec(self, contents) -> int:
         auec_variants = []
@@ -122,7 +115,7 @@ class OCR:
             raise OCRNumberNotFoundError(contents)
         return value
 
-    def image_to_auec(self) -> float:
+    async def image_to_auec(self) -> float:
         logger_discord.info(f' processing image URI: "{self.uri}"')
         self.image = convert_image_format(self.image, output_format="PNG")
         self.image = self.image.convert("RGB")
