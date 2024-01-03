@@ -1,10 +1,23 @@
 import time
+import functools
+import os
 from datetime import datetime
 import logging
 import tinydb
 from mott.exceptions import MottException
 
 logger_discord = logging.getLogger("discord")
+
+
+@functools.cache
+def get_bank(bank_id):
+    database_dir = os.getenv("DISCORD_BOT_DB_DIR")
+    db_file_path = f"{database_dir}/{str(bank_id).replace(' ', '_')}_db.json"
+    logger_discord.info(
+        f"get handler for db: {db_file_path} already exists? {os.path.isfile(db_file_path)}"
+    )
+    db = tinydb.TinyDB(db_file_path)
+    return Accounts(db)
 
 
 class AccountEmptyError(MottException):
@@ -47,7 +60,7 @@ class Accounts:
         if self.accounts_table.contains(query.account == account_name):
             raise AccountAlreadyExistsError(account_name)
         self.accounts_table.insert(
-            {"account": account_name, "owners": role_id.replace("@", "")}
+            {"account": account_name, "owners": str(role_id).replace("@", "")}
         )
         table = self.db.table(f"{account_name}_transactions")
 
@@ -139,7 +152,7 @@ class Accounts:
         return self.db.table(f"{account_name}_transactions").all()
 
     def permitted(self, account_name, role_ids):
-        role_ids_san = [r.replace("@", "") for r in role_ids]
+        role_ids_san = [str(r).replace("@", "") for r in role_ids]
         logger_discord.info(
             f"permissions check: {role_ids_san} sufficient for {account_name}?"
         )
