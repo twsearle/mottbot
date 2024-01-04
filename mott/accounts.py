@@ -20,7 +20,17 @@ def get_bank(bank_id):
     return Accounts(db)
 
 
-class AccountEmptyError(MottException):
+class AccountError(MottException):
+    def __init__(self, account_name, message=""):
+        if message == "":
+            self.message = f"Account: {account_name} error"
+        else:
+            self.message = message
+        self.account_name = account_name
+        super().__init__(self.message)
+
+
+class AccountEmptyError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} has no transactions."
@@ -30,7 +40,7 @@ class AccountEmptyError(MottException):
         super().__init__(self.message)
 
 
-class AccountDoesNotExistError(MottException):
+class AccountDoesNotExistError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} does not exist."
@@ -40,7 +50,7 @@ class AccountDoesNotExistError(MottException):
         super().__init__(self.message)
 
 
-class AccountAlreadyExistsError(MottException):
+class AccountAlreadyExistsError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} already exists. Perhaps you intended to `delete` or `reset`?"
@@ -98,7 +108,7 @@ class Accounts:
             total += doc["value"]
         return total
 
-    def pay_to(self, sender_name, account_name, value):
+    def pay_to(self, sender_name, account_name, value, verified=False):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
@@ -106,7 +116,12 @@ class Accounts:
         unixtime = int(time.mktime(d.timetuple()))
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
-            {"timestamp": unixtime, "id": sender_name, "value": value}
+            {
+                "timestamp": unixtime,
+                "id": sender_name,
+                "value": value,
+                "ocr-verified": verified,
+            }
         )
 
     def withdraw_from(self, payee_name, account_name, value):
@@ -117,7 +132,12 @@ class Accounts:
         unixtime = int(time.mktime(d.timetuple()))
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
-            {"timestamp": unixtime, "id": payee_name, "value": -value}
+            {
+                "timestamp": unixtime,
+                "id": payee_name,
+                "value": -value,
+                "ocr-verified": False,
+            }
         )
 
     def last_transaction(self, account_name):

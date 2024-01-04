@@ -87,6 +87,7 @@ class TestAccounts:
         test_accounts.delete(account_name)
         assert last["id"] == "BoneW"
         assert last["value"] == 1e7
+        assert last["ocr-verified"] == False
 
     def test_accounts_summary(self, test_accounts):
         with pytest.raises(acc.AccountDoesNotExistError):
