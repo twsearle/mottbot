@@ -16,7 +16,7 @@ def test_accounts():
     return acc.Accounts(db)
 
 
-account_name, role_id = "Chris Roberts", "CEO"
+msg_id, account_name, role_id = 0, "Chris Roberts", "CEO"
 
 
 class TestAccounts:
@@ -48,18 +48,18 @@ class TestAccounts:
 
     def test_accounts_pay_to(self, test_accounts):
         with pytest.raises(acc.AccountDoesNotExistError):
-            test_accounts.pay_to("BoneW", account_name, 1e7)
+            test_accounts.pay_to(msg_id, "BoneW", account_name, 1e7)
         returnstr = test_accounts.create(account_name, role_id)
-        test_accounts.pay_to("BoneW", account_name, 1e7)
+        test_accounts.pay_to(msg_id, "BoneW", account_name, 1e7)
         balance = test_accounts.balance(account_name)
         test_accounts.delete(account_name)
         assert balance == 1e7
 
     def test_accounts_withdraw_from(self, test_accounts):
         with pytest.raises(acc.AccountDoesNotExistError):
-            test_accounts.withdraw_from("SalteMike", account_name, 1e9)
+            test_accounts.withdraw_from(msg_id, "SalteMike", account_name, 1e9)
         returnstr = test_accounts.create(account_name, role_id)
-        test_accounts.withdraw_from("SalteMike", account_name, 1e9)
+        test_accounts.withdraw_from(msg_id, "SalteMike", account_name, 1e9)
         balance = test_accounts.balance(account_name)
         test_accounts.delete(account_name)
         assert balance == -1e9
@@ -70,8 +70,8 @@ class TestAccounts:
         returnstr = test_accounts.create(account_name, role_id)
         balance = test_accounts.balance(account_name)
         assert balance == 0
-        test_accounts.pay_to("BoneW", account_name, 1e7)
-        test_accounts.withdraw_from("SalteMike", account_name, 5e6)
+        test_accounts.pay_to(0, "BoneW", account_name, 1e7)
+        test_accounts.withdraw_from(1, "SalteMike", account_name, 5e6)
         balance = test_accounts.balance(account_name)
         test_accounts.delete(account_name)
         assert balance == 5e6
@@ -82,10 +82,11 @@ class TestAccounts:
         returnstr = test_accounts.create(account_name, role_id)
         with pytest.raises(acc.AccountEmptyError):
             last = test_accounts.last_transaction(account_name)
-        test_accounts.pay_to("BoneW", account_name, 1e7)
+        test_accounts.pay_to(msg_id, "BoneW", account_name, 1e7)
         last = test_accounts.last_transaction(account_name)
         test_accounts.delete(account_name)
-        assert last["id"] == "BoneW"
+        assert last["message_id"] == msg_id
+        assert last["user_id"] == "BoneW"
         assert last["value"] == 1e7
         assert last["ocr-verified"] == False
 
@@ -93,11 +94,11 @@ class TestAccounts:
         with pytest.raises(acc.AccountDoesNotExistError):
             source_contributions = test_accounts.summary(account_name)
         returnstr = test_accounts.create(account_name, role_id)
-        test_accounts.pay_to("BoneW", account_name, 1e7)
-        test_accounts.pay_to("BoneW", account_name, 1e7)
-        test_accounts.pay_to("greyL", account_name, 1e6)
-        test_accounts.pay_to("greyMalding", account_name, 2e3)
-        test_accounts.withdraw_from("SalteMike", account_name, 1e3)
+        test_accounts.pay_to(0, "BoneW", account_name, 1e7)
+        test_accounts.pay_to(1, "BoneW", account_name, 1e7)
+        test_accounts.pay_to(2, "greyL", account_name, 1e6)
+        test_accounts.pay_to(4, "greyMalding", account_name, 2e3)
+        test_accounts.withdraw_from(5, "SalteMike", account_name, 1e3)
         source_contributions, withdrawls = test_accounts.summary(account_name)
         test_accounts.delete(account_name)
         assert source_contributions["BoneW"] == 2e7

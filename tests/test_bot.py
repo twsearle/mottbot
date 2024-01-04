@@ -33,6 +33,7 @@ def mocked_bot(mocker):
 @pytest.fixture
 def mocked_message(mocker):
     message = mocker.Mock()
+    message.id = 0
     message.guild.name = "greyLegatus"
     message.guild.id = "greyLegatus"
     message.author.id = 0
@@ -66,6 +67,7 @@ class TestBot:
         await mott.bot.pay(mocked_ctx, auec_value)
 
         mocked_account.pay_to.assert_called_with(
+            mocked_ctx.message.id,
             mocked_ctx.message.author.id,
             mocked_ctx.message.channel.id,
             auec_value,
@@ -92,6 +94,7 @@ class TestBot:
         await mott.bot.withdraw(mocked_ctx, auec_value)
 
         mocked_account.withdraw_from.assert_called_with(
+            mocked_ctx.message.id,
             mocked_ctx.message.author.id,
             mocked_ctx.message.channel.id,
             auec_value,

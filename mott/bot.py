@@ -57,7 +57,7 @@ async def pay(ctx, auec_value: int):
     sender_name = message.author.display_name
     account_name = message.channel.name
 
-    guild_bank.pay_to(message.author.id, message.channel.id, auec_value)
+    guild_bank.pay_to(message.id, message.author.id, message.channel.id, auec_value)
 
     info_message = (
         f"{guild} {sender_name}: responding to `pay` request,"
@@ -99,7 +99,9 @@ async def withdraw(ctx, auec_value: int):
     sender_name = message.author.display_name
     account_name = message.channel.name
 
-    guild_bank.withdraw_from(message.author.id, message.channel.id, auec_value)
+    guild_bank.withdraw_from(
+        message.id, message.author.id, message.channel.id, auec_value
+    )
 
     info_message = (
         f"{guild} {sender_name}: responding to `withdraw` request,"

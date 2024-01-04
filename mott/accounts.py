@@ -108,7 +108,7 @@ class Accounts:
             total += doc["value"]
         return total
 
-    def pay_to(self, sender_name, account_name, value, verified=False):
+    def pay_to(self, message_id, sender_name, account_name, value, verified=False):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
@@ -117,14 +117,15 @@ class Accounts:
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
             {
+                "message_id": message_id,
                 "timestamp": unixtime,
-                "id": sender_name,
+                "user_id": sender_name,
                 "value": value,
                 "ocr-verified": verified,
             }
         )
 
-    def withdraw_from(self, payee_name, account_name, value):
+    def withdraw_from(self, message_id, payee_name, account_name, value):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
@@ -133,8 +134,9 @@ class Accounts:
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
             {
+                "message_id": message_id,
                 "timestamp": unixtime,
-                "id": payee_name,
+                "user_id": payee_name,
                 "value": -value,
                 "ocr-verified": False,
             }
@@ -162,14 +164,20 @@ class Accounts:
             if line["value"] < 0:
                 withdrawls += abs(line["value"])
             else:
-                if source_contributions.get(line["id"]):
-                    source_contributions[line["id"]] += line["value"]
+                if source_contributions.get(line["user_id"]):
+                    source_contributions[line["user_id"]] += line["value"]
                 else:
-                    source_contributions[line["id"]] = line["value"]
+                    source_contributions[line["user_id"]] = line["value"]
         return source_contributions, withdrawls
 
     def all(self, account_name):
-        return self.db.table(f"{account_name}_transactions").all()
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
+            raise AccountDoesNotExistError(account_name)
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        if len(transactions_db) < 1:
+            raise AccountEmptyError(account_name)
+        return transactions_db.all()
 
     def permitted(self, account_name, role_ids):
         role_ids_san = [str(r).replace("@", "") for r in role_ids]
