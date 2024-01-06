@@ -46,6 +46,13 @@ logger_discord = logging.getLogger("discord")
 # logger_discord.addHandler(logging.StreamHandler().setFormatter(formatter))
 
 
+async def has_admin_role(ctx):
+    guild = ctx.message.guild
+    guild_bank = accounts.get_bank(guild.id)
+    user_role_ids = [r.id for r in ctx.message.author.roles]
+    return guild_bank.permitted(ctx.message.channel.id, user_role_ids)
+
+
 @commands.command()
 async def pay(ctx, auec_value: int):
     """- pay into the account for this channel"""
@@ -69,6 +76,16 @@ async def pay(ctx, auec_value: int):
     await ctx.send(response)
 
 
+async def standard_error(ctx, error):
+    if isinstance(error, accounts.AccountError):
+        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
+        await ctx.send(error.message.replace(error.account_name, plain_text_name))
+    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
+        await ctx.send(error.message)
+
+
 @pay.error
 async def pay_error(ctx, error):
     if isinstance(error, commands.BadArgument):
@@ -80,17 +97,13 @@ async def pay_error(ctx, error):
         await ctx.send(
             "Please enter an aUEC value and try again: " " `!motrader pay <auec_value>`"
         )
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    else:
+        await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 
 @commands.command()
+@commands.check(has_admin_role)
 async def withdraw(ctx, auec_value: int):
     """- withdraw from the account for this channel"""
     message = ctx.message
@@ -127,13 +140,8 @@ async def withdraw_error(ctx, error):
             "Please enter an aUEC value and try again: "
             " `!motrader withdraw <auec_value>`"
         )
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    else:
+        await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 
@@ -165,15 +173,7 @@ async def last_transaction(ctx):
 
 @last_transaction.error
 async def last_transaction_error(ctx, error):
-    if isinstance(error, MottException):
-        await ctx.send(error.message)
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 
@@ -201,7 +201,6 @@ async def create(
     guild_bank = accounts.get_bank(guild.id)
 
     sender_name = message.author.display_name
-    user_role_ids = [str(r) for r in message.author.roles]
     account_name = account_channel.name
 
     guild_bank.create(account_channel.id, owning_role.id)
@@ -239,6 +238,7 @@ async def create_error(ctx, error):
 
 
 @commands.command(name="all")
+@commands.check(has_admin_role)
 async def _all(
     ctx,
     account_channel: discord.TextChannel = commands.parameter(
@@ -253,7 +253,6 @@ async def _all(
 
     sender_name = message.author.display_name
     account_name = account_channel.name
-    user_role_ids = [str(r) for r in message.author.roles]
 
     all_transactions = guild_bank.all(account_channel.id)
     response = f"### Account Transactions: {account_name}\n"
@@ -294,6 +293,7 @@ async def _all_error(ctx, error):
 
 
 @commands.command()
+@commands.check(has_admin_role)
 async def delete(
     ctx,
     account_channel: discord.TextChannel = commands.parameter(
@@ -342,6 +342,7 @@ async def delete_error(ctx, error):
 
 
 @commands.command()
+@commands.check(has_admin_role)
 async def reset(
     ctx,
     account_channel: discord.TextChannel = commands.parameter(
@@ -379,13 +380,7 @@ async def reset_error(ctx, error):
         await ctx.send(
             "Please enter a channel name: " " `!motrader account reset <channel>`"
         )
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 
@@ -422,17 +417,12 @@ async def balance_error(ctx, error):
             "Sorry, I couldn't interpret that request"
             " please check `!motrader help account balance` and try again"
         )
-    if isinstance(error, commands.MissingRequiredArgument):
+    elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(
             "Please enter a channel name: " " `!motrader account balance <channel>`"
         )
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    else:
+        await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 
@@ -481,13 +471,8 @@ async def summary_error(ctx, error):
         await ctx.send(
             "Please enter a channel name: " " `!motrader account summary <channel>`"
         )
-    elif isinstance(error, accounts.AccountError):
-        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
-        await ctx.send(error.message.replace(error.account_name, plain_text_name))
-    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
-        if isinstance(error, commands.CommandInvokeError):
-            error = error.original
-        await ctx.send(error.message)
+    else:
+        await standard_error(ctx, error)
     logger_discord.error(error.message)
 
 

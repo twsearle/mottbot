@@ -38,8 +38,11 @@ def mocked_message(mocker):
     message.guild.id = "greyLegatus"
     message.author.id = 0
     message.author.display_name = "Chris Roberts"
+    mocked_role = mocker.Mock()
+    mocked_role.id = 0
+    mocked_role.name = "CEO"
     message.author.roles = [
-        "CEO",
+        mocked_role,
     ]
     message.channel.name = "receipts"
     message.channel.id = 0
@@ -287,6 +290,23 @@ time,author,value,ocr-verified
         mocked_ctx.send.assert_called_with(test_response)
         mocked_account.summary.assert_called_with(mocked_message.channel.id)
         mocked_account.balance.assert_called_with(mocked_message.channel.id)
+
+    @pytest.mark.asyncio
+    async def test_has_admin_role(self, mocker, mocked_message):
+        mocked_ctx = mocker.patch(
+            "mott.bot.commands.Context", new_callable=mocker.PropertyMock
+        )
+        mocked_ctx.bot = mocked_bot
+        mocked_ctx.message = mocked_message
+        mocked_account = mocker.Mock()
+        mocked_account.permitted.return_value = True
+        mocked_bank = mocker.patch("mott.bot.accounts.get_bank")
+        mocked_bank.return_value = mocked_account
+
+        assert await mott.bot.has_admin_role(mocked_ctx)
+        mocked_account.permitted.assert_called_with(
+            mocked_message.channel.id, [i.id for i in mocked_message.author.roles]
+        )
 
     @pytest.mark.asyncio
     async def test_on_message(self, mocker, mocked_message):
