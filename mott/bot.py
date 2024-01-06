@@ -1,19 +1,33 @@
+"""
+mo.trader tracker bot
+---------------------
+
+I am a Star Citizen mo.trader helper bot. I am holding the line until CIG give us a decent banking app for in-game money.
+
+Once you create an account in a channel I will begin watching all images posted in that channel. If they can be interpreted as screenshots of an mo.trader transaction, I will save the value and sender to the account database. This data can be queried by those with sufficient permissions.
+"""
+
 import os
 import logging
 import logging.handlers
 from pathlib import Path
 
 import discord
+from discord.ext import commands
 import asyncio
 
 from mott.exceptions import MottException
-import mott.responses as responses
+import mott.accounts as accounts
 from mott.ocr import OCR, uri_validator
 
+module_doc = __doc__
+
+APP_COMMAND = "!motrader "
 
 discord.utils.setup_logging(level=logging.INFO, root=False)
 
 logger_discord = logging.getLogger("discord")
+
 # logger_discord.setLevel(logging.INFO)
 # log_dir = Path(os.getenv("DISCORD_BOT_DB_DIR", "."))
 #
@@ -32,16 +46,531 @@ logger_discord = logging.getLogger("discord")
 # logger_discord.addHandler(logging.StreamHandler().setFormatter(formatter))
 
 
-async def send_message(response_handler, message, request_text, is_private):
-    sender_name = str(message.author)
-    account_name = str(message.channel.name)
-    user_role_ids = [str(r) for r in message.author.roles]
-    response = response_handler.handle_response(
-        sender_name, account_name, user_role_ids, request_text
+async def has_admin_role(ctx):
+    guild = ctx.message.guild
+    guild_bank = accounts.get_bank(guild.id)
+    user_role_ids = [r.id for r in ctx.message.author.roles]
+    return guild_bank.permitted(ctx.message.channel.id, user_role_ids)
+
+
+@commands.command()
+async def pay(ctx, auec_value: int):
+    """- pay into the account for this channel"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = message.channel.name
+
+    guild_bank.pay_to(message.id, message.author.id, message.channel.id, auec_value)
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `pay` request,"
+        f" {sender_name} is paying {auec_value} to {account_name}"
     )
-    await message.author.send(response) if is_private else await message.channel.send(
-        response
+    logger_discord.info(info_message)
+
+    response = f"{sender_name} paid {account_name} {auec_value}aUEC"
+    await ctx.send(response)
+
+
+async def standard_error(ctx, error):
+    if isinstance(error, accounts.AccountError):
+        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
+        await ctx.send(error.message.replace(error.account_name, plain_text_name))
+    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
+        await ctx.send(error.message)
+
+
+@pay.error
+async def pay_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret the aUEC value"
+            " please check `!motrader help pay` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter an aUEC value and try again: " " `!motrader pay <auec_value>`"
+        )
+    else:
+        await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+@commands.command()
+@commands.check(has_admin_role)
+async def withdraw(ctx, auec_value: int):
+    """- withdraw from the account for this channel"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = message.channel.name
+
+    guild_bank.withdraw_from(
+        message.id, message.author.id, message.channel.id, auec_value
     )
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `withdraw` request,"
+        f" {sender_name} is withdrawing {auec_value} from {account_name}"
+    )
+    logger_discord.info(info_message)
+
+    response = f"{sender_name} withdrew {auec_value}aUEC from {account_name}"
+    await ctx.send(response)
+
+
+@withdraw.error
+async def withdraw_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret the aUEC value"
+            " please check `!motrader help withdraw` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter an aUEC value and try again: "
+            " `!motrader withdraw <auec_value>`"
+        )
+    else:
+        await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+@commands.command(name="last")
+async def last_transaction(ctx):
+    """- display the last transaction in this account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = message.channel.name
+
+    transaction = guild_bank.last_transaction(message.channel.id)
+
+    info_message = f"{guild} {sender_name}: responding to `last` request"
+    logger_discord.info(info_message)
+
+    user = await ctx.bot.fetch_user(transaction["user_id"])
+    display_name = user.display_name
+    response = (
+        f'<t:{int(transaction["timestamp"]):d}> User: "{display_name}"'
+        f' value: {int(transaction["value"]):d} aUEC '
+        f'ocr-verified: {transaction["ocr-verified"]}'
+    )
+    await ctx.send(response)
+
+
+@last_transaction.error
+async def last_transaction_error(ctx, error):
+    await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+@commands.group(name="account")
+async def _account(ctx):
+    """- account management commands"""
+    if ctx.invoked_subcommand is None:
+        await ctx.send("Invalid account command passed.")
+
+
+@commands.command()
+async def create(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="The discord text channel to watch for motrader receipts"
+    ),
+    owning_role: discord.Role = commands.parameter(
+        description="The discord role required to manage the account"
+    ),
+):
+    """- create a motrader-tracker account to track a discord channel with admin restrictions locked to a role"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = account_channel.name
+
+    guild_bank.create(account_channel.id, owning_role.id)
+    response = f"account: {account_name} created for {owning_role.name}"
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account create` "
+        f"request, creating account and adding {account_name} "
+        f"channel to watchlist"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@create.error
+async def create_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret those arguments"
+            " please check `!motrader help account create` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter both a channel name and a owning role: "
+            " `!motrader account create <channel> <owning_role>`"
+        )
+    elif isinstance(error, accounts.AccountError):
+        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
+        await ctx.send(error.message.replace(error.account_name, plain_text_name))
+    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
+        await ctx.send(error.message)
+    logger_discord.error(error.message)
+
+
+@commands.command(name="all")
+@commands.check(has_admin_role)
+async def _all(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="discord text channel that is being watched for receipts"
+    ),
+):
+    """- print all transactions as comma-separated-values for an account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = account_channel.name
+
+    all_transactions = guild_bank.all(account_channel.id)
+    response = f"### Account Transactions: {account_name}\n"
+    response += f"time,author,value,ocr-verified\n"
+    for transaction in all_transactions:
+        user = await ctx.bot.fetch_user(transaction["user_id"])
+        display_name = user.display_name
+        response += (
+            f'<t:{int(transaction["timestamp"]):d}>,"{display_name}"'
+            f',{int(transaction["value"]):d},{transaction["ocr-verified"]}\n'
+        )
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account all` "
+        f"request, displaying all transactions for {account_name} channel"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@_all.error
+async def _all_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret that `discord.TextChannel`"
+            " please check `!motrader help account all` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter a channel name: " " `!motrader account all <channel>`"
+        )
+    elif isinstance(error, MottException):
+        await ctx.send(error.message)
+    elif isinstance(error, commands.CommandInvokeError):
+        await ctx.send(error.original.message)
+    elif isinstance(error, commands.CommandError):
+        await ctx.send(error.message)
+
+
+@commands.command()
+@commands.check(has_admin_role)
+async def delete(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="discord text channel that is being watched for receipts"
+    ),
+):
+    """- delete an account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = account_channel.name
+
+    guild_bank.delete(account_channel.id)
+    response = f"account: {account_name} deleted"
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account delete`"
+        " request: deleting {account_name}"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@delete.error
+async def delete_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret that `discord.TextChannel`"
+            " please check `!motrader help account delete` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter a channel name: " " `!motrader account all <channel>`"
+        )
+    elif isinstance(error, accounts.AccountError):
+        plain_text_name = await ctx.bot.fetch_channel(error.account_name)
+        await ctx.send(error.message.replace(error.account_name, plain_text_name))
+    elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
+        await ctx.send(error.message)
+    logger_discord.error(error.message)
+
+
+@commands.command()
+@commands.check(has_admin_role)
+async def reset(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="discord text channel that is being watched for receipts"
+    ),
+):
+    """- reset an account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = message.author.display_name
+    account_name = account_channel.name
+
+    guild_bank.reset(account_channel.id)
+    response = f"account: {account_name} reset"
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account reset`"
+        f" request, resetting {account_name}"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@reset.error
+async def reset_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret that discord.TextChannel"
+            " please check `!motrader help account reset` and try again"
+        )
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter a channel name: " " `!motrader account reset <channel>`"
+        )
+    await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+@commands.command()
+async def balance(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="discord text channel that is being watched for receipts"
+    ),
+):
+    """- print the current balance of an account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = str(message.author.display_name)
+    account_name = account_channel.name
+    balance = guild_bank.balance(account_channel.id)
+    response = f"{account_name} balance: {balance}aUEC"
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account balance`"
+        f" request, balance for {account_name} is {balance}"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@balance.error
+async def balance_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret that request"
+            " please check `!motrader help account balance` and try again"
+        )
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter a channel name: " " `!motrader account balance <channel>`"
+        )
+    else:
+        await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+@commands.command()
+async def summary(
+    ctx,
+    account_channel: discord.TextChannel = commands.parameter(
+        description="discord text channel that is being watched for receipts"
+    ),
+):
+    """- print a summary of contributions and withdrawls from an account"""
+    message = ctx.message
+
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+
+    sender_name = str(message.author.display_name)
+    account_name = account_channel.name
+    source_contributions, withdrawls = guild_bank.summary(account_channel.id)
+
+    response = f"### Account Summary: {account_name}\n"
+    for contributor_id, value in source_contributions.items():
+        user = await ctx.bot.fetch_user(contributor_id)
+        contributor = user.display_name
+        response += f'"{contributor}" paid: {int(value):d}aUEC\n'
+    response += f"withdrawn: {int(withdrawls):d}aUEC\n"
+    balance = guild_bank.balance(account_channel.id)
+    response += f"balance: {int(balance):d}aUEC\n"
+
+    info_message = (
+        f"{guild} {sender_name}: responding to `account summary`"
+        f" request for {account_name}"
+    )
+    logger_discord.info(info_message)
+    await ctx.send(response)
+
+
+@summary.error
+async def summary_error(ctx, error):
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(
+            "Sorry, I couldn't interpret that `discord.TextChannel`"
+            " please check `!motrader help account summary` and try again"
+        )
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            "Please enter a channel name: " " `!motrader account summary <channel>`"
+        )
+    else:
+        await standard_error(ctx, error)
+    logger_discord.error(error.message)
+
+
+async def on_message(message):
+    """Attempt to use OCR to read a mo.trader receipt and add it as a transaction"""
+    username = message.author.display_name
+    user_id = message.author.id
+    guild = message.guild
+    guild_bank = accounts.get_bank(guild.id)
+    channel = message.channel.name
+    is_private = False
+
+    if len(message.attachments) > 0:
+        logger_discord.info(
+            f" {guild}#{channel} {username}: Reading images from {channel}"
+        )
+        for attachment in message.attachments:
+            try:
+                if attachment_is_image(attachment):
+                    logger_discord.info(
+                        f" {guild}#{channel} {username}: Reading image at {attachment.url}"
+                    )
+                    ocr_reader = await OCR.create(attachment.proxy_url)
+                    auec_amount = await ocr_reader.image_to_auec()
+                    guild_bank.pay_to(
+                        message.id,
+                        user_id,
+                        message.channel.id,
+                        auec_amount,
+                        verified=True,
+                    )
+                    response = (
+                        f"{username} paid {message.channel.name} {auec_amount} aUEC."
+                        f" If I got this wrong react to your image with :x:"
+                    )
+                    await message.channel.send(response)
+            except commands.CommandError as e:
+                if isinstance(e, commands.CommandInvokeError):
+                    e = e.original
+                logger_discord.error("Exception during image text recognition")
+                logger_discord.error(e.message)
+                response_message = (
+                    f"Sorry, I couldn't read the aUEC from that screenshot."
+                    f" Please check the examples above and try a different "
+                    f"screenshot. Make sure you use a screenshot and not a "
+                    f"photograph of the screen (I can't read images of PC monitors sorry)."
+                    f" Alternatively, enter the payment manually with `{APP_COMMAND} pay`."
+                )
+                await message.channel.send(response_message)
+        return
+
+
+async def on_reaction_add(reaction, user):
+    """Cancel an mo.trader transaction associated with an account."""
+    if user.id != reaction.message.author.id:
+        return
+    if len(reaction.message.attachments) == 0:
+        return
+    guild = reaction.message.guild
+    channel = reaction.message.channel
+    logger_discord.info(
+        f" {guild}#{channel} {user.display_name}: reaction on ocr image {reaction.emoji}"
+    )
+    if reaction.emoji != "❌":
+        return
+
+    try:
+        guild_bank = accounts.get_bank(guild.id)
+        message_id = reaction.message.id
+        # remove all transactions with that message id (multiple image
+        # attachments can be contained in a single image) throw error if not
+        # found
+        transactions = guild_bank.remove_transactions(
+            reaction.message.channel.id, message_id
+        )
+        response = "I am removing any transactions associated with your reaction:\n"
+        for transaction in transactions:
+            assert transaction["user_id"] == user.id
+            display_name = user.display_name
+            response += (
+                f'<t:{int(transaction["timestamp"]):d}> User: "{display_name}"'
+                f' value: {int(transaction["value"]):d} aUEC '
+                f'ocr-verified: {transaction["ocr-verified"]}\n'
+            )
+        logger_discord.info(
+            f" {guild}#{channel} {display_name}: removing transactions: " + response
+        )
+        await reaction.message.channel.send(response)
+    except commands.CommandError as e:
+        if isinstance(e, commands.CommandInvokeError):
+            e = e.original
+        logger_discord.error("Exception during image text recognition")
+        logger_discord.error(e.message)
+        response = (
+            "I don't have a payment recorded corresponding to that image."
+            " I either failed to read it or it has already been deleted."
+        )
+        await reaction.message.channel.send(response)
 
 
 def attachment_is_image(attachment):
@@ -56,72 +585,26 @@ def attachment_is_image(attachment):
 
 def run_discord_bot():
     TOKEN = os.getenv("DISCORD_BOT_SECRET_TOKEN")
-    APP_COMMAND = "!motrader "
-    FLAG_PRIVATE = "?"
 
     intents = discord.Intents.default()
     intents.message_content = True
-    client = discord.Client(intents=intents)
 
-    @client.event
-    async def on_ready():
-        logger_discord.info(f" {client.user} is now running")
+    discordbot = commands.Bot(
+        command_prefix=APP_COMMAND, intents=intents, description=module_doc
+    )
 
-    @client.event
-    async def on_message(message):
-        if message.author == client.user:
-            return
+    discordbot.add_command(pay)
+    discordbot.add_command(withdraw)
+    discordbot.add_command(last_transaction)
+    discordbot.add_listener(on_message)
+    discordbot.add_listener(on_reaction_add)
 
-        username = str(message.author)
-        guild = str(message.guild)
-        channel = str(message.channel.name)
-        is_private = False
-        response_handler = responses.get_handler(guild)
+    discordbot.add_command(_account)
+    _account.add_command(create)
+    _account.add_command(delete)
+    _account.add_command(reset)
+    _account.add_command(balance)
+    _account.add_command(summary)
+    _account.add_command(_all)
 
-        if (
-            channel in response_handler.watched_channels()
-            and len(message.attachments) > 0
-        ):
-            logger_discord.info(
-                f" {guild}#{channel} {username}: Reading images from {channel}"
-            )
-            for attachment in message.attachments:
-                try:
-                    if attachment_is_image(attachment):
-                        logger_discord.info(
-                            f" {guild}#{channel} {username}: Reading image at {attachment.url}"
-                        )
-                        ocr_reader = await OCR.create(attachment.proxy_url)
-                        auec_amount = await ocr_reader.image_to_auec()
-                        user_message = f"pay {auec_amount}"
-                        await send_message(
-                            response_handler,
-                            message,
-                            user_message,
-                            is_private=is_private,
-                        )
-                except MottException as e:
-                    logger_discord.info("Exception during image text recognition")
-                    response_message = (
-                        f"Sorry, I couldn't read the aUEC from that screenshot."
-                        f" Either check the examples above or try a different screenshot or enter the payment manually with `{APP_COMMAND} pay`."
-                    )
-                    await message.channel.send(response_message)
-
-            return
-
-        elif not message.content.startswith(APP_COMMAND):
-            return
-
-        else:
-            user_command = message.content.removeprefix(APP_COMMAND).lstrip()
-            is_private = True if user_command.startswith(FLAG_PRIVATE) else False
-            user_message = str(user_command.removeprefix(FLAG_PRIVATE)).lstrip()
-
-            logger_discord.info(f' {guild}#{channel} {username}: "{user_message}"')
-
-            await send_message(
-                response_handler, message, user_message, is_private=is_private
-            )
-
-    client.run(TOKEN, log_handler=None)
+    discordbot.run(TOKEN, log_handler=None)

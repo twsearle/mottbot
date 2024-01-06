@@ -1,4 +1,6 @@
 import time
+import functools
+import os
 from datetime import datetime
 import logging
 import tinydb
@@ -7,7 +9,28 @@ from mott.exceptions import MottException
 logger_discord = logging.getLogger("discord")
 
 
-class AccountEmptyError(MottException):
+@functools.cache
+def get_bank(bank_id):
+    database_dir = os.getenv("DISCORD_BOT_DB_DIR")
+    db_file_path = f"{database_dir}/{str(bank_id).replace(' ', '_')}_db.json"
+    logger_discord.info(
+        f"get handler for db: {db_file_path} already exists? {os.path.isfile(db_file_path)}"
+    )
+    db = tinydb.TinyDB(db_file_path)
+    return Accounts(db)
+
+
+class AccountError(MottException):
+    def __init__(self, account_name, message=""):
+        if message == "":
+            self.message = f"Account: {account_name} error"
+        else:
+            self.message = message
+        self.account_name = account_name
+        super().__init__(self.message)
+
+
+class AccountEmptyError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} has no transactions."
@@ -17,7 +40,7 @@ class AccountEmptyError(MottException):
         super().__init__(self.message)
 
 
-class AccountDoesNotExistError(MottException):
+class AccountDoesNotExistError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} does not exist."
@@ -27,7 +50,7 @@ class AccountDoesNotExistError(MottException):
         super().__init__(self.message)
 
 
-class AccountAlreadyExistsError(MottException):
+class AccountAlreadyExistsError(AccountError):
     def __init__(self, account_name, message=""):
         if message == "":
             self.message = f"Account: {account_name} already exists. Perhaps you intended to `delete` or `reset`?"
@@ -47,7 +70,7 @@ class Accounts:
         if self.accounts_table.contains(query.account == account_name):
             raise AccountAlreadyExistsError(account_name)
         self.accounts_table.insert(
-            {"account": account_name, "owners": role_id.replace("@", "")}
+            {"account": account_name, "owners": str(role_id).replace("@", "")}
         )
         table = self.db.table(f"{account_name}_transactions")
 
@@ -85,7 +108,7 @@ class Accounts:
             total += doc["value"]
         return total
 
-    def pay_to(self, sender_name, account_name, value):
+    def pay_to(self, message_id, sender_name, account_name, value, verified=False):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
@@ -93,10 +116,16 @@ class Accounts:
         unixtime = int(time.mktime(d.timetuple()))
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
-            {"timestamp": unixtime, "id": sender_name, "value": value}
+            {
+                "message_id": message_id,
+                "timestamp": unixtime,
+                "user_id": sender_name,
+                "value": value,
+                "ocr-verified": verified,
+            }
         )
 
-    def withdraw_from(self, payee_name, account_name, value):
+    def withdraw_from(self, message_id, payee_name, account_name, value):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):
             raise AccountDoesNotExistError(account_name)
@@ -104,7 +133,13 @@ class Accounts:
         unixtime = int(time.mktime(d.timetuple()))
         transactions_db = self.db.table(f"{account_name}_transactions")
         transactions_db.insert(
-            {"timestamp": unixtime, "id": payee_name, "value": -value}
+            {
+                "message_id": message_id,
+                "timestamp": unixtime,
+                "user_id": payee_name,
+                "value": -value,
+                "ocr-verified": False,
+            }
         )
 
     def last_transaction(self, account_name):
@@ -116,6 +151,21 @@ class Accounts:
             raise AccountEmptyError(account_name)
         el = transactions_db.all()[-1]
         return transactions_db.get(doc_id=el.doc_id)
+
+    def remove_transactions(self, account_name, message_id):
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
+            raise AccountDoesNotExistError(account_name)
+        db = self.db.table(f"{account_name}_transactions")
+        transactions = db.search(query.message_id == message_id)
+        if len(transactions) == 0:
+            raise AccountError(
+                account_name,
+                message=f"Account: {account_name} has no transactions matching that message",
+            )
+        doc_ids = [d.doc_id for d in transactions]
+        db.remove(doc_ids=doc_ids)
+        return transactions
 
     def summary(self, account_name):
         query = tinydb.Query()
@@ -129,17 +179,23 @@ class Accounts:
             if line["value"] < 0:
                 withdrawls += abs(line["value"])
             else:
-                if source_contributions.get(line["id"]):
-                    source_contributions[line["id"]] += line["value"]
+                if source_contributions.get(line["user_id"]):
+                    source_contributions[line["user_id"]] += line["value"]
                 else:
-                    source_contributions[line["id"]] = line["value"]
+                    source_contributions[line["user_id"]] = line["value"]
         return source_contributions, withdrawls
 
     def all(self, account_name):
-        return self.db.table(f"{account_name}_transactions").all()
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
+            raise AccountDoesNotExistError(account_name)
+        transactions_db = self.db.table(f"{account_name}_transactions")
+        if len(transactions_db) < 1:
+            raise AccountEmptyError(account_name)
+        return transactions_db.all()
 
     def permitted(self, account_name, role_ids):
-        role_ids_san = [r.replace("@", "") for r in role_ids]
+        role_ids_san = [str(r).replace("@", "") for r in role_ids]
         logger_discord.info(
             f"permissions check: {role_ids_san} sufficient for {account_name}?"
         )
