@@ -152,6 +152,21 @@ class Accounts:
         el = transactions_db.all()[-1]
         return transactions_db.get(doc_id=el.doc_id)
 
+    def remove_transactions(self, account_name, message_id):
+        query = tinydb.Query()
+        if not self.accounts_table.contains(query.account == account_name):
+            raise AccountDoesNotExistError(account_name)
+        db = self.db.table(f"{account_name}_transactions")
+        transactions = db.search(query.message_id == message_id)
+        if len(transactions) == 0:
+            raise AccountError(
+                account_name,
+                message=f"Account: {account_name} has no transactions matching that message",
+            )
+        doc_ids = [d.doc_id for d in transactions]
+        db.remove(doc_ids=doc_ids)
+        return transactions
+
     def summary(self, account_name):
         query = tinydb.Query()
         if not self.accounts_table.contains(query.account == account_name):

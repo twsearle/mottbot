@@ -84,6 +84,8 @@ async def pay_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -129,6 +131,8 @@ async def withdraw_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -149,7 +153,7 @@ async def last_transaction(ctx):
     info_message = f"{guild} {sender_name}: responding to `last` request"
     logger_discord.info(info_message)
 
-    user = await ctx.bot.fetch_user(transaction["id"])
+    user = await ctx.bot.fetch_user(transaction["user_id"])
     display_name = user.display_name
     response = (
         f'<t:{int(transaction["timestamp"]):d}> User: "{display_name}"'
@@ -167,6 +171,8 @@ async def last_transaction_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -226,6 +232,8 @@ async def create_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -251,7 +259,7 @@ async def _all(
     response = f"### Account Transactions: {account_name}\n"
     response += f"time,author,value,ocr-verified\n"
     for transaction in all_transactions:
-        user = await ctx.bot.fetch_user(transaction["id"])
+        user = await ctx.bot.fetch_user(transaction["user_id"])
         display_name = user.display_name
         response += (
             f'<t:{int(transaction["timestamp"]):d}>,"{display_name}"'
@@ -279,6 +287,8 @@ async def _all_error(ctx, error):
         )
     elif isinstance(error, MottException):
         await ctx.send(error.message)
+    elif isinstance(error, commands.CommandInvokeError):
+        await ctx.send(error.original.message)
     elif isinstance(error, commands.CommandError):
         await ctx.send(error.message)
 
@@ -325,6 +335,8 @@ async def delete_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -371,6 +383,8 @@ async def reset_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -416,6 +430,8 @@ async def balance_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
@@ -469,11 +485,14 @@ async def summary_error(ctx, error):
         plain_text_name = await ctx.bot.fetch_channel(error.account_name)
         await ctx.send(error.message.replace(error.account_name, plain_text_name))
     elif isinstance(error, MottException) or isinstance(error, commands.CommandError):
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
         await ctx.send(error.message)
     logger_discord.error(error.message)
 
 
 async def on_message(message):
+    """Attempt to use OCR to read a mo.trader receipt and add it as a transaction"""
     username = message.author.display_name
     user_id = message.author.id
     guild = message.guild
@@ -494,11 +513,20 @@ async def on_message(message):
                     ocr_reader = await OCR.create(attachment.proxy_url)
                     auec_amount = await ocr_reader.image_to_auec()
                     guild_bank.pay_to(
-                        user_id, message.channel.id, auec_amount, verified=True
+                        message.id,
+                        user_id,
+                        message.channel.id,
+                        auec_amount,
+                        verified=True,
                     )
-                    response = f"{username} paid {account_name} {auec_value}aUEC. You should totally panic if I got this wrong. BoneW"
-                    await ctx.send(response)
+                    response = (
+                        f"{username} paid {message.channel.name} {auec_amount} aUEC."
+                        f" If I got this wrong react to your image with :x:"
+                    )
+                    await message.channel.send(response)
             except commands.CommandError as e:
+                if isinstance(e, commands.CommandInvokeError):
+                    e = e.original
                 logger_discord.error("Exception during image text recognition")
                 logger_discord.error(e.message)
                 response_message = (
@@ -510,6 +538,54 @@ async def on_message(message):
                 )
                 await message.channel.send(response_message)
         return
+
+
+async def on_reaction_add(reaction, user):
+    """Cancel an mo.trader transaction associated with an account."""
+    if user.id != reaction.message.author.id:
+        return
+    if len(reaction.message.attachments) == 0:
+        return
+    guild = reaction.message.guild
+    channel = reaction.message.channel
+    logger_discord.info(
+        f" {guild}#{channel} {user.display_name}: reaction on ocr image {reaction.emoji}"
+    )
+    if reaction.emoji != "❌":
+        return
+
+    try:
+        guild_bank = accounts.get_bank(guild.id)
+        message_id = reaction.message.id
+        # remove all transactions with that message id (multiple image
+        # attachments can be contained in a single image) throw error if not
+        # found
+        transactions = guild_bank.remove_transactions(
+            reaction.message.channel.id, message_id
+        )
+        response = "I am removing any transactions associated with your reaction:\n"
+        for transaction in transactions:
+            assert transaction["user_id"] == user.id
+            display_name = user.display_name
+            response += (
+                f'<t:{int(transaction["timestamp"]):d}> User: "{display_name}"'
+                f' value: {int(transaction["value"]):d} aUEC '
+                f'ocr-verified: {transaction["ocr-verified"]}\n'
+            )
+        logger_discord.info(
+            f" {guild}#{channel} {display_name}: removing transactions: " + response
+        )
+        await reaction.message.channel.send(response)
+    except commands.CommandError as e:
+        if isinstance(e, commands.CommandInvokeError):
+            e = e.original
+        logger_discord.error("Exception during image text recognition")
+        logger_discord.error(e.message)
+        response = (
+            "I don't have a payment recorded corresponding to that image."
+            " I either failed to read it or it has already been deleted."
+        )
+        await reaction.message.channel.send(response)
 
 
 def attachment_is_image(attachment):
@@ -536,6 +612,7 @@ def run_discord_bot():
     discordbot.add_command(withdraw)
     discordbot.add_command(last_transaction)
     discordbot.add_listener(on_message)
+    discordbot.add_listener(on_reaction_add)
 
     discordbot.add_command(_account)
     _account.add_command(create)

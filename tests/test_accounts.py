@@ -90,6 +90,22 @@ class TestAccounts:
         assert last["value"] == 1e7
         assert last["ocr-verified"] == False
 
+    def test_accounts_remove_transactions(self, test_accounts):
+        with pytest.raises(acc.AccountDoesNotExistError):
+            transactions = test_accounts.remove_transactions(account_name, msg_id)
+        returnstr = test_accounts.create(account_name, role_id)
+        with pytest.raises(acc.AccountError):
+            transactions = test_accounts.remove_transactions(account_name, msg_id)
+        test_accounts.pay_to(msg_id, "BoneW", account_name, 1e7)
+        test_accounts.pay_to(msg_id, "BoneW", account_name, 1e7)
+        transactions = test_accounts.remove_transactions(account_name, msg_id)
+        test_accounts.delete(account_name)
+        for transaction in transactions:
+            assert transaction["message_id"] == msg_id
+            assert transaction["user_id"] == "BoneW"
+            assert transaction["value"] == 1e7
+            assert transaction["ocr-verified"] == False
+
     def test_accounts_summary(self, test_accounts):
         with pytest.raises(acc.AccountDoesNotExistError):
             source_contributions = test_accounts.summary(account_name)
